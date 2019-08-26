@@ -1,4 +1,7 @@
-module Hatchinq.DropDown exposing (Config, Message, State, configure, dropDownCount, filled, init, label, outlined, searchable, update)
+module Hatchinq.DropDown exposing
+    ( Config, Message, State, configure, dropDownCount, filled, init, label, outlined, searchable, update
+    , multiSelectable
+    )
 
 {-|
 
@@ -9,8 +12,9 @@ module Hatchinq.DropDown exposing (Config, Message, State, configure, dropDownCo
 
 -}
 
+import Browser.Dom as Dom
 import Dict
-import Element exposing (Element, Length, alignRight, below, centerY, column, el, fill, focused, height, htmlAttribute, inFront, mouseOver, padding, paddingEach, paddingXY, pointer, px, scale, scrollbarY, shrink, width)
+import Element exposing (Color, Element, Length, alignRight, below, centerY, column, el, fill, focused, height, htmlAttribute, inFront, mouseOver, padding, paddingEach, paddingXY, pointer, px, rgb, row, scale, scrollbarY, shrink, width)
 import Element.Background as Background
 import Element.Border as Border
 import Element.Events as Events
@@ -20,6 +24,7 @@ import Hatchinq.Attribute exposing (Attribute, custom, toElement, toInternalConf
 import Hatchinq.Theme as Theme exposing (Theme, arrowTransition, icon, textWithEllipsis, transition)
 import Hatchinq.Util exposing (arrowDownKeyCode, arrowUpKeyCode, enterKeyCode, escapeKeyCode, keysDownAttribute)
 import Html.Attributes as Attr
+import Set exposing (Set)
 import Task
 
 
@@ -37,6 +42,7 @@ type alias InternalConfig =
     , searchable : Bool
     , dropDownCount : Int
     , label : Maybe String
+    , multiSelect : Bool
     }
 
 
@@ -51,6 +57,17 @@ type Query
     = Query String
 
 
+type Selection
+    = Single (Maybe Int)
+    | Multiple (Set Int) (Maybe Int)
+
+
+type ItemSelection
+    = Selected
+    | Deselected
+    | Unselectable
+
+
 type UiState
     = Closed
     | Open Query
@@ -59,14 +76,14 @@ type UiState
 {-| -}
 type alias State =
     { uiState : UiState
-    , focusedItem : Maybe Int
+    , selection : Selection
     }
 
 
 {-| -}
 init : State
 init =
-    State Closed Nothing
+    State Closed (Single Nothing)
 
 
 
@@ -81,6 +98,10 @@ type Message item msg
     | SearchInput Query
     | ArrowUpPress (Maybe Int)
     | ArrowDownPress (Maybe Int)
+    | SelectMulti Int
+    | DeselectMulti Int
+    | ToggleMulti Int
+    | Focus (Result Dom.Error ())
     | Noop
 
 
@@ -91,15 +112,41 @@ type Message item msg
 {-| -}
 update : Message item msg -> State -> ( State, Cmd msg )
 update msg model =
+    let
+        a =
+            Debug.log "" msg
+    in
     case msg of
         OpenSelect maybeFocusedIndex ->
-            ( { model | uiState = Open (Query ""), focusedItem = maybeFocusedIndex }, Cmd.none )
+            let
+                selection =
+                    case model.selection of
+                        Single _ ->
+                            Single maybeFocusedIndex
+
+                        Multiple set _ ->
+                            Multiple set maybeFocusedIndex
+            in
+            ( { model | uiState = Open (Query ""), selection = selection }, Cmd.none )
 
         CloseSelect ->
-            ( { model | uiState = Closed, focusedItem = Nothing }, Cmd.none )
+            let
+                selection =
+                    case model.selection of
+                        Single _ ->
+                            Single Nothing
+
+                        Multiple set _ ->
+                            Multiple set Nothing
+            in
+            ( { model | uiState = Closed, selection = selection }, Cmd.none )
 
         Select _ onSelect ->
-            ( { model | uiState = Closed, focusedItem = Nothing }
+            let
+                b =
+                    Debug.log "SELECT" model
+            in
+            ( { model | uiState = Closed, selection = Single Nothing }
             , case onSelect of
                 Just onSelectMsg ->
                     Task.succeed onSelectMsg |> Task.perform identity
@@ -109,7 +156,16 @@ update msg model =
             )
 
         SearchInput query ->
-            ( { model | uiState = Open query, focusedItem = Nothing }, Cmd.none )
+            let
+                selection =
+                    case model.selection of
+                        Single _ ->
+                            Single Nothing
+
+                        Multiple set _ ->
+                            Multiple set Nothing
+            in
+            ( { model | uiState = Open query, selection = selection }, Cmd.none )
 
         ArrowUpPress maybeFocusedIndex ->
             let
@@ -121,15 +177,25 @@ update msg model =
                         _ ->
                             model.uiState
 
-                focusedItem =
-                    case model.focusedItem of
-                        Just index ->
-                            Just (index - 1)
+                selection =
+                    case model.selection of
+                        Single maybeIndex ->
+                            case maybeIndex of
+                                Just index ->
+                                    Single (Just (index - 1))
 
-                        Nothing ->
-                            Just (Maybe.withDefault -1 maybeFocusedIndex)
+                                Nothing ->
+                                    Single (Just (Maybe.withDefault -1 maybeFocusedIndex))
+
+                        Multiple set maybeIndex ->
+                            case maybeIndex of
+                                Just index ->
+                                    Multiple set (Just (index - 1))
+
+                                Nothing ->
+                                    Multiple set (Just (Maybe.withDefault -1 maybeFocusedIndex))
             in
-            ( { model | uiState = uiState, focusedItem = focusedItem }, Cmd.none )
+            ( { model | uiState = uiState, selection = selection }, Cmd.none )
 
         ArrowDownPress maybeFocusedIndex ->
             let
@@ -141,18 +207,79 @@ update msg model =
                         _ ->
                             model.uiState
 
-                focusedItem =
-                    case model.focusedItem of
-                        Just index ->
-                            Just (index + 1)
+                selection =
+                    case model.selection of
+                        Single maybeIndex ->
+                            case maybeIndex of
+                                Just index ->
+                                    Single (Just (index + 1))
 
-                        Nothing ->
-                            Just (Maybe.withDefault 0 maybeFocusedIndex)
+                                Nothing ->
+                                    Single (Just (Maybe.withDefault 1 maybeFocusedIndex))
+
+                        Multiple set maybeIndex ->
+                            case maybeIndex of
+                                Just index ->
+                                    Multiple set (Just (index + 1))
+
+                                Nothing ->
+                                    Multiple set (Just (Maybe.withDefault 1 maybeFocusedIndex))
             in
-            ( { model | uiState = uiState, focusedItem = focusedItem }, Cmd.none )
+            ( { model | uiState = uiState, selection = selection }, Cmd.none )
+
+        Focus _ ->
+            ( model, Cmd.none )
 
         Noop ->
             ( model, Cmd.none )
+
+        SelectMulti index ->
+            let
+                selected =
+                    case model.selection of
+                        Single _ ->
+                            Multiple (Set.singleton index) (Just -1)
+
+                        Multiple set focused ->
+                            Multiple (Set.insert index set) focused
+            in
+            ( { model | selection = selected }, Task.attempt Focus (Dom.focus "my-app-search-box") )
+
+        DeselectMulti index ->
+            let
+                selected =
+                    case model.selection of
+                        Single _ ->
+                            Multiple Set.empty (Just -1)
+
+                        Multiple set focused ->
+                            Multiple (Set.remove index set) focused
+            in
+            ( { model | selection = selected }, Cmd.none )
+
+        ToggleMulti index ->
+            let
+                operator =
+                    case model.selection of
+                        Single _ ->
+                            Set.insert
+
+                        Multiple set _ ->
+                            if Set.member index set then
+                                Debug.log "remove" Set.remove
+
+                            else
+                                Debug.log "insert" Set.insert
+
+                selected =
+                    case model.selection of
+                        Single _ ->
+                            Multiple Set.empty (Just -1)
+
+                        Multiple set focused ->
+                            Multiple (operator index set) focused
+            in
+            ( { model | selection = selected, uiState = Open (Query "") }, Cmd.none )
 
 
 
@@ -193,6 +320,12 @@ searchable =
 
 
 {-| -}
+multiSelectable : Attribute InternalConfig
+multiSelectable =
+    custom (\v -> { v | multiSelect = True })
+
+
+{-| -}
 dropDownCount : Int -> Attribute InternalConfig
 dropDownCount count =
     custom (\v -> { v | dropDownCount = count })
@@ -215,6 +348,7 @@ view config attributes data =
             , searchable = False
             , dropDownCount = 10
             , label = Nothing
+            , multiSelect = False
             }
 
         internalConfig =
@@ -245,6 +379,9 @@ view config attributes data =
             else
                 theme.colors.gray.dark
 
+        inputText =
+            Maybe.map converter data.value
+
         ( ( query, text ), placeholder, labelAttributes ) =
             case state.uiState of
                 Open (Query q) ->
@@ -262,7 +399,7 @@ view config attributes data =
                     )
 
                 Closed ->
-                    ( ( Query "", Maybe.withDefault "" <| Maybe.map converter data.value )
+                    ( ( Query "", Maybe.withDefault "" <| inputText )
                     , Nothing
                     , case data.value of
                         Just _ ->
@@ -364,8 +501,13 @@ view config attributes data =
         itemsSize =
             List.length data.items
 
-        focusedItem =
-            Maybe.withDefault Nothing (Maybe.map (\index -> List.head (List.drop (modBy itemsSize index) data.items)) data.state.focusedItem)
+        focus =
+            case data.state.selection of
+                Single select ->
+                    Maybe.withDefault Nothing (Maybe.map (\index -> List.head (List.drop (modBy itemsSize index) data.items)) select)
+
+                Multiple _ select ->
+                    Maybe.withDefault Nothing (Maybe.map (\index -> List.head (List.drop (modBy itemsSize index) data.items)) select)
 
         selectedItemIndex =
             Maybe.withDefault Nothing
@@ -387,17 +529,56 @@ view config attributes data =
                 )
 
         selectMessage =
-            case focusedItem of
-                Just item ->
-                    Select item (Maybe.map (\onChange -> onChange item) data.onChange)
+            if internalConfig.multiSelect then
+                case state.selection of
+                    Single _ ->
+                        case focus of
+                            Just item ->
+                                case selectedItemIndex of
+                                    Just index ->
+                                        ToggleMulti index
 
-                Nothing ->
-                    case state.uiState of
-                        Closed ->
-                            OpenSelect selectedItemIndex
+                                    Nothing ->
+                                        Noop
 
-                        _ ->
-                            Noop
+                            Nothing ->
+                                case state.uiState of
+                                    Closed ->
+                                        OpenSelect selectedItemIndex
+
+                                    _ ->
+                                        Noop
+
+                    Multiple set maybeIndex ->
+                        case focus of
+                            Just _ ->
+                                case maybeIndex of
+                                    Just index ->
+                                        ToggleMulti index
+
+                                    Nothing ->
+                                        Noop
+
+                            Nothing ->
+                                case state.uiState of
+                                    Closed ->
+                                        OpenSelect selectedItemIndex
+
+                                    _ ->
+                                        Noop
+
+            else
+                case focus of
+                    Just item ->
+                        Select item (Maybe.map (\onChange -> onChange item) data.onChange)
+
+                    Nothing ->
+                        case state.uiState of
+                            Closed ->
+                                OpenSelect selectedItemIndex
+
+                            _ ->
+                                Noop
 
         keyDownAttributes =
             [ keysDownAttribute
@@ -405,7 +586,7 @@ view config attributes data =
                     [ ( arrowUpKeyCode, lift (ArrowUpPress selectedItemIndex) )
                     , ( arrowDownKeyCode, lift (ArrowDownPress selectedItemIndex) )
                     , ( enterKeyCode, lift selectMessage )
-                    , ( escapeKeyCode, lift CloseSelect )
+                    , ( escapeKeyCode, lift (Debug.log "escape" CloseSelect) )
                     ]
                 )
             ]
@@ -427,7 +608,7 @@ view config attributes data =
                                 Noop
 
                             else
-                                CloseSelect
+                                Debug.log "LOST FOCUS" Noop
                    )
                 :: (Element.htmlAttribute <| Attr.disabled disabled)
                 :: keyDownAttributes
@@ -439,6 +620,7 @@ view config attributes data =
                 :: centerY
                 :: padding 8
                 :: htmlAttribute arrowTransition
+                :: Events.onClick (lift <| CloseSelect)
                 :: (case state.uiState of
                         Open _ ->
                             [ Font.color theme.colors.secondary.color
@@ -465,41 +647,77 @@ view config attributes data =
         )
 
 
-dropdownItem : Config item msg -> Length -> Bool -> item -> Maybe item -> View item msg -> Element msg
-dropdownItem { theme, lift } widthLength focused value selectedItem data =
+dropdownItem : Config item msg -> Length -> Bool -> ItemSelection -> Int -> item -> Maybe item -> View item msg -> Element msg
+dropdownItem { theme, lift } widthLength focused selected index value selectedItem data =
     let
         onSelectMessage =
             Maybe.map (\onChange -> onChange value) data.onChange
 
-        itemAttributes =
-            (Events.onMouseDown <| lift <| Select value onSelectMessage)
-                :: pointer
+        keyDownAttributes =
+            keysDownAttribute
+                (Dict.fromList
+                    [ ( escapeKeyCode, lift (Debug.log "escape" CloseSelect) )
+                    ]
+                )
+
+        commonList =
+            pointer
+                :: keyDownAttributes
                 :: Font.family [ theme.font.main ]
                 :: Font.size theme.font.defaultSize
                 :: width widthLength
                 :: height (px 56)
                 :: paddingEach { left = 12, top = 20, right = 12, bottom = 4 }
-                :: (if Just value == selectedItem then
-                        if focused then
-                            [ Background.color theme.colors.secondary.light ]
+                :: []
 
-                        else
-                            [ Background.color theme.colors.secondary.lighter ]
+        itemAttributes =
+            case selected of
+                Unselectable ->
+                    (Events.onMouseDown <| lift <| Select value onSelectMessage)
+                        :: (if Just value == selectedItem then
+                                if focused then
+                                    [ Background.color theme.colors.secondary.light ]
 
-                    else if focused then
-                        [ Background.color theme.colors.gray.light
-                        , mouseOver [ Background.color theme.colors.gray.color ]
-                        ]
+                                else
+                                    [ Background.color theme.colors.secondary.lighter ]
 
-                    else
-                        [ mouseOver [ Background.color theme.colors.gray.lighter ] ]
-                   )
+                            else if focused then
+                                [ Background.color theme.colors.gray.light
+                                , mouseOver [ Background.color theme.colors.gray.color ]
+                                ]
+
+                            else
+                                [ mouseOver [ Background.color theme.colors.gray.lighter ] ]
+                           )
+                        ++ commonList
+
+                Selected ->
+                    (Events.onMouseDown <| lift <| DeselectMulti index)
+                        :: (if focused then
+                                [ Background.color theme.colors.secondary.lighter ]
+
+                            else
+                                [ Background.color theme.colors.secondary.light ]
+                           )
+                        ++ commonList
+
+                Deselected ->
+                    (Events.onMouseDown <| lift <| SelectMulti index)
+                        :: (if focused then
+                                [ Background.color theme.colors.gray.light
+                                , mouseOver [ Background.color theme.colors.gray.color ]
+                                ]
+
+                            else
+                                [ mouseOver [ Background.color theme.colors.gray.lighter ] ]
+                           )
+                        ++ commonList
     in
     el itemAttributes (textWithEllipsis <| data.itemToString value)
 
 
 dropdownBody : Config item msg -> InternalConfig -> Length -> State -> Query -> View item msg -> Element msg
-dropdownBody config internalConfig widthLength { uiState, focusedItem } (Query query) data =
+dropdownBody config internalConfig widthLength { uiState, selection } (Query query) data =
     let
         items =
             filteredValues data query
@@ -539,11 +757,45 @@ dropdownBody config internalConfig widthLength { uiState, focusedItem } (Query q
             List.length items
 
         focusedIndex =
-            Maybe.map (\index -> modBy itemsSize index) focusedItem
+            case selection of
+                Single select ->
+                    Maybe.map (\index -> modBy itemsSize index) select
+
+                Multiple _ select ->
+                    Maybe.map (\index -> modBy itemsSize index) select
+
+        indexToItemSelect : Int -> ItemSelection
+        indexToItemSelect index =
+            case selection of
+                Single _ ->
+                    if internalConfig.multiSelect then
+                        Deselected
+
+                    else
+                        Unselectable
+
+                Multiple set _ ->
+                    if Set.member index set then
+                        Selected
+
+                    else
+                        Deselected
+
+        createDropDownItem index value =
+            dropdownItem config widthLength (Just index == focusedIndex) (indexToItemSelect index) index value data.value data
+
+        onClickAttribute =
+            Events.onLoseFocus <|
+                config.lift <|
+                    if internalConfig.multiSelect then
+                        CloseSelect
+
+                    else
+                        Noop
     in
     el
         bodyAttributes
-        (column [ width widthLength, scrollbarY ] (List.indexedMap (\index value -> dropdownItem config widthLength (Just index == focusedIndex) value data.value data) items))
+        (column [ width widthLength, scrollbarY, onClickAttribute, htmlAttribute <| Attr.attribute "tabindex" "0" ] (List.indexedMap createDropDownItem items))
 
 
 filteredValues : View item msg -> String -> List item

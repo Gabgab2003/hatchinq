@@ -79,6 +79,7 @@ type DropDownComponent
     = Default
     | Disabled
     | FullWidth
+    | MultiSelect
 
 
 type ListComponent
@@ -276,6 +277,8 @@ type alias Model =
     , inputField : TextField.State InputField
     , defaultDropdownValue : Maybe String
     , defaultDropdown : DropDown.State
+    , multiSelectDropdownValue : Maybe String
+    , multiSelectDropdown : DropDown.State
     , disabledDropdownValue : Maybe String
     , disabledDropdown : DropDown.State
     , fullWidthDropdownValue : Maybe String
@@ -327,6 +330,8 @@ init _ =
       , inputField = TextField.init
       , defaultDropdownValue = Nothing
       , defaultDropdown = DropDown.init
+      , multiSelectDropdownValue = Nothing
+      , multiSelectDropdown = DropDown.init
       , disabledDropdownValue = Nothing
       , disabledDropdown = DropDown.init
       , fullWidthDropdownValue = Nothing
@@ -424,6 +429,9 @@ update msg model =
                 FullWidth ->
                     ( { model | fullWidthDropdownValue = Just newValue }, Cmd.none )
 
+                MultiSelect ->
+                    ( { model | multiSelectDropdownValue = Just newValue }, Cmd.none )
+
         DropdownStateChange id internalMsg ->
             case id of
                 Default ->
@@ -446,6 +454,13 @@ update msg model =
                             DropDown.update internalMsg model.fullWidthDropdown
                     in
                     ( { model | fullWidthDropdown = newState }, cmd )
+
+                MultiSelect ->
+                    let
+                        ( newState, cmd ) =
+                            DropDown.update internalMsg model.multiSelectDropdown
+                    in
+                    ( { model | multiSelectDropdown = newState }, cmd )
 
         DataTableChange internalMsg ->
             let
@@ -914,6 +929,16 @@ mainContent model =
                 , value = model.defaultDropdownValue
                 , onChange = Just (\item -> DropdownValueChange Default item)
                 , state = model.defaultDropdown
+                }
+            , dropDown MultiSelect
+                [ DropDown.label "Multiselect Dropdown"
+                , DropDown.multiSelectable
+                ]
+                { items = [ "a very long text that doesn't fit in item", "a", "b", "c" ]
+                , itemToString = identity
+                , value = model.multiSelectDropdownValue
+                , onChange = Just (\item -> DropdownValueChange MultiSelect item)
+                , state = model.multiSelectDropdown
                 }
             , checkbox [] { value = model.checkboxValue, onChange = Just (\value -> CheckboxValueChange value) }
             , checkbox []
