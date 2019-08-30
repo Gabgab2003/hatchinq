@@ -98,9 +98,9 @@ type Message item msg
     | SearchInput Query
     | ArrowUpPress (Maybe Int)
     | ArrowDownPress (Maybe Int)
-    | SelectMulti Int
-    | DeselectMulti Int
-    | ToggleMulti Int
+    | SelectMulti Int (Maybe msg)
+    | DeselectMulti Int (Maybe msg)
+    | ToggleMulti Int (Maybe msg)
     | Focus (Result Dom.Error ())
     | Noop
 
@@ -142,10 +142,6 @@ update msg model =
             ( { model | uiState = Closed, selection = selection }, Cmd.none )
 
         Select _ onSelect ->
-            let
-                b =
-                    Debug.log "SELECT" model
-            in
             ( { model | uiState = Closed, selection = Single Nothing }
             , case onSelect of
                 Just onSelectMsg ->
@@ -233,7 +229,7 @@ update msg model =
         Noop ->
             ( model, Cmd.none )
 
-        SelectMulti index ->
+        SelectMulti index onSelectMsg ->
             let
                 selected =
                     case model.selection of
@@ -243,9 +239,16 @@ update msg model =
                         Multiple set focused ->
                             Multiple (Set.insert index set) focused
             in
-            ( { model | selection = selected }, Task.attempt Focus (Dom.focus "my-app-search-box") )
+            ( { model | selection = selected }
+            , case onSelectMsg of
+                Just message ->
+                    Task.succeed message |> Task.perform identity
 
-        DeselectMulti index ->
+                Nothing ->
+                    Cmd.none
+            )
+
+        DeselectMulti index onSelectMsg ->
             let
                 selected =
                     case model.selection of
@@ -254,10 +257,31 @@ update msg model =
 
                         Multiple set focused ->
                             Multiple (Set.remove index set) focused
-            in
-            ( { model | selection = selected }, Cmd.none )
 
-        ToggleMulti index ->
+                selectEmpty =
+                    case model.selection of
+                        Single _ ->
+                            True
+
+                        Multiple set focused ->
+                            Set.isEmpty set
+
+
+            in
+            ( { model | selection = selected }
+            , if selectEmpty then
+                case onSelectMsg of
+                    Just message ->
+                        Task.succeed message |> Task.perform identity
+
+                    Nothing ->
+                        Cmd.none
+              else
+                --Task.succeed message |> Task.perform identity
+                Cmd.none
+            )
+
+        ToggleMulti index onSelectMsg ->
             let
                 operator =
                     case model.selection of
@@ -279,7 +303,14 @@ update msg model =
                         Multiple set focused ->
                             Multiple (operator index set) focused
             in
-            ( { model | selection = selected, uiState = Open (Query "") }, Cmd.none )
+            ( { model | selection = selected, uiState = Open (Query "") }
+            , case onSelectMsg of
+                Just message ->
+                    Task.succeed message |> Task.perform identity
+
+                Nothing ->
+                    Cmd.none
+            )
 
 
 
@@ -509,6 +540,14 @@ view config attributes data =
                 Multiple _ select ->
                     Maybe.withDefault Nothing (Maybe.map (\index -> List.head (List.drop (modBy itemsSize index) data.items)) select)
 
+
+        message =
+            case data.value of
+                Just itemVal ->
+                    Maybe.map (\onChange -> onChange itemVal) data.onChange
+                Nothing ->
+                    Nothing
+
         selectedItemIndex =
             Maybe.withDefault Nothing
                 (Maybe.map
@@ -536,7 +575,7 @@ view config attributes data =
                             Just item ->
                                 case selectedItemIndex of
                                     Just index ->
-                                        ToggleMulti index
+                                        ToggleMulti index message
 
                                     Nothing ->
                                         Noop
@@ -554,7 +593,7 @@ view config attributes data =
                             Just _ ->
                                 case maybeIndex of
                                     Just index ->
-                                        ToggleMulti index
+                                        ToggleMulti index message
 
                                     Nothing ->
                                         Noop
@@ -670,6 +709,9 @@ dropdownItem { theme, lift } widthLength focused selected index value selectedIt
                 :: paddingEach { left = 12, top = 20, right = 12, bottom = 4 }
                 :: []
 
+        message =
+            Maybe.map (\onChange -> onChange value) data.onChange
+
         itemAttributes =
             case selected of
                 Unselectable ->
@@ -692,7 +734,7 @@ dropdownItem { theme, lift } widthLength focused selected index value selectedIt
                         ++ commonList
 
                 Selected ->
-                    (Events.onMouseDown <| lift <| DeselectMulti index)
+                    (Events.onMouseDown <| lift <| DeselectMulti index message)
                         :: (if focused then
                                 [ Background.color theme.colors.secondary.lighter ]
 
@@ -702,7 +744,7 @@ dropdownItem { theme, lift } widthLength focused selected index value selectedIt
                         ++ commonList
 
                 Deselected ->
-                    (Events.onMouseDown <| lift <| SelectMulti index)
+                    (Events.onMouseDown <| lift <| SelectMulti index message)
                         :: (if focused then
                                 [ Background.color theme.colors.gray.light
                                 , mouseOver [ Background.color theme.colors.gray.color ]
